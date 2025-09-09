@@ -1,220 +1,240 @@
-'use client'
+"use client";
 
-import { useState, useEffect, useRef } from 'react'
-import { useSession } from 'next-auth/react'
-import { useSocket } from '@/components/SocketProvider'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Badge } from '@/components/ui/badge'
-import { MessageBubble } from '@/components/MessageBubble'
-import { PollComponent } from '@/components/PollComponent'
-import { Send, BarChart3, Users, Settings } from 'lucide-react'
+import { useState, useEffect, useRef } from "react";
+import { useSession } from "next-auth/react";
+import { useSocket } from "@/components/SocketProvider";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
+import { MessageBubble } from "@/components/MessageBubble";
+import { PollComponent } from "@/components/PollComponent";
+import { GroupManagement } from "@/components/GroupManagement";
+import { Send, BarChart3, Users, Settings, MessageCircle } from "lucide-react";
 
 interface Message {
-  id: string
-  content: string
-  message_type: 'text' | 'poll' | 'system'
-  created_at: string
+  id: string;
+  content: string;
+  message_type: "text" | "poll" | "system";
+  created_at: string;
   sender: {
-    id: string
-    username: string
-    display_name: string
-    avatar_url?: string
-  }
+    id: string;
+    username: string;
+    display_name: string;
+    avatar_url?: string;
+  };
   poll?: {
-    id: string
-    question: string
-    status: 'active' | 'completed'
-    results_summary?: string
+    id: string;
+    question: string;
+    status: "active" | "completed";
+    results_summary?: string;
     options: Array<{
-      id: string
-      option_text: string
-      option_order: number
-    }>
+      id: string;
+      option_text: string;
+      option_order: number;
+    }>;
     responses: Array<{
-      id: string
+      id: string;
       user: {
-        id: string
-        username: string
-        display_name: string
-      }
+        id: string;
+        username: string;
+        display_name: string;
+      };
       option: {
-        id: string
-        option_text: string
-      }
-    }>
-  }
+        id: string;
+        option_text: string;
+      };
+    }>;
+  };
 }
 
 interface ChatAreaProps {
-  chatId: string
-  chatType: 'friend' | 'group'
+  chatId: string;
+  chatType: "friend" | "group";
 }
 
 export function ChatArea({ chatId, chatType }: ChatAreaProps) {
-  const { data: session } = useSession()
-  const { socket } = useSocket()
-  const [messages, setMessages] = useState<Message[]>([])
-  const [newMessage, setNewMessage] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [sending, setSending] = useState(false)
-  const [chatInfo, setChatInfo] = useState<any>(null)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const { data: session } = useSession();
+  const { socket } = useSocket();
+  const userId = (session as any)?.user?.id as string | undefined;
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [newMessage, setNewMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [chatInfo, setChatInfo] = useState<any>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Load messages and chat info
   useEffect(() => {
-    loadMessages()
-    loadChatInfo()
-  }, [chatId, chatType])
+    loadMessages();
+    loadChatInfo();
+  }, [chatId, chatType]);
 
-  // Socket event listeners
+  // Socket event listeners and room joining
   useEffect(() => {
-    if (!socket) return
+    if (!socket) return;
 
-    socket.on('message:new', (message) => {
+    // Join the appropriate room
+    if (chatType === "group") {
+      socket.emit("join:room", chatId);
+    } else {
+      // For direct messages, join the current user's direct room
+      socket.emit("join:room", `direct:${userId}`);
+    }
+
+    socket.on("message:new", (message) => {
       if (
-        (chatType === 'group' && message.group_id === chatId) ||
-        (chatType === 'friend' && 
-         ((message.sender_id === chatId && message.receiver_id === session?.user?.id) ||
-          (message.sender_id === session?.user?.id && message.receiver_id === chatId)))
+        (chatType === "group" && message.group_id === chatId) ||
+        (chatType === "friend" &&
+          ((message.sender_id === chatId && message.receiver_id === userId) ||
+            (message.sender_id === userId && message.receiver_id === chatId)))
       ) {
-        setMessages(prev => [...prev, message])
+        setMessages((prev) => [...prev, message]);
       }
-    })
+    });
 
-    socket.on('poll:new', (poll) => {
+    socket.on("poll:new", (poll) => {
       if (poll.group_id === chatId) {
-        loadMessages() // Reload to get the full poll data
+        loadMessages(); // Reload to get the full poll data
       }
-    })
+    });
 
-    socket.on('poll:response', () => {
-      loadMessages() // Reload to get updated responses
-    })
+    socket.on("poll:response", () => {
+      loadMessages(); // Reload to get updated responses
+    });
 
     return () => {
-      socket.off('message:new')
-      socket.off('poll:new')
-      socket.off('poll:response')
-    }
-  }, [socket, chatId, chatType, session?.user?.id])
+      // Leave the room when component unmounts or chat changes
+      if (chatType === "group") {
+        socket.emit("leave:room", chatId);
+      } else {
+        socket.emit("leave:room", `direct:${userId}`);
+      }
+      socket.off("message:new");
+      socket.off("poll:new");
+      socket.off("poll:response");
+    };
+  }, [socket, chatId, chatType, userId]);
 
   // Auto scroll to bottom
   useEffect(() => {
-    scrollToBottom()
-  }, [messages])
+    scrollToBottom();
+  }, [messages]);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
   const loadMessages = async () => {
     try {
       const params = new URLSearchParams({
-        limit: '50',
-        offset: '0'
-      })
-      
-      if (chatType === 'group') {
-        params.append('groupId', chatId)
+        limit: "50",
+        offset: "0",
+      });
+
+      if (chatType === "group") {
+        params.append("groupId", chatId);
       } else {
-        params.append('receiverId', chatId)
+        params.append("receiverId", chatId);
       }
 
-      const response = await fetch(`/api/messages?${params}`)
+      const response = await fetch(`/api/messages?${params}`);
       if (response.ok) {
-        const data = await response.json()
-        setMessages(data.messages)
+        const data = await response.json();
+        setMessages(data.messages);
       }
     } catch (error) {
-      console.error('Failed to load messages:', error)
+      console.error("Failed to load messages:", error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   const loadChatInfo = async () => {
     try {
-      if (chatType === 'group') {
-        const response = await fetch('/api/groups')
+      if (chatType === "group") {
+        const response = await fetch("/api/groups");
         if (response.ok) {
-          const data = await response.json()
-          const group = data.groups.find((g: any) => g.id === chatId)
-          setChatInfo(group)
+          const data = await response.json();
+          const group = data.groups.find((g: any) => g.id === chatId);
+          setChatInfo(group);
         }
       } else {
-        const response = await fetch('/api/friends')
+        const response = await fetch("/api/friends");
         if (response.ok) {
-          const data = await response.json()
-          const friendship = data.friends.find((f: any) => f.friend.id === chatId)
-          setChatInfo(friendship?.friend)
+          const data = await response.json();
+          const friendship = data.friends.find(
+            (f: any) => f.friend.id === chatId
+          );
+          setChatInfo(friendship?.friend);
         }
       }
     } catch (error) {
-      console.error('Failed to load chat info:', error)
+      console.error("Failed to load chat info:", error);
     }
-  }
+  };
 
   const sendMessage = async (e: React.FormEvent) => {
-    e.preventDefault()
-    
-    if (!newMessage.trim() || sending) return
-    
-    setSending(true)
-    
+    e.preventDefault();
+
+    if (!newMessage.trim() || sending) return;
+
+    setSending(true);
+
     try {
       const payload = {
         content: newMessage.trim(),
-        ...(chatType === 'group' ? { groupId: chatId } : { receiverId: chatId })
-      }
+        ...(chatType === "group"
+          ? { groupId: chatId }
+          : { receiverId: chatId }),
+      };
 
-      const response = await fetch('/api/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
+      const response = await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
       if (response.ok) {
-        setNewMessage('')
+        setNewMessage("");
         // Message will be added via socket event
       }
     } catch (error) {
-      console.error('Failed to send message:', error)
+      console.error("Failed to send message:", error);
     } finally {
-      setSending(false)
+      setSending(false);
     }
-  }
+  };
 
   const handlePollResponse = async (pollId: string, optionId: string) => {
     try {
       const response = await fetch(`/api/polls/${pollId}/respond`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ optionId })
-      })
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ optionId }),
+      });
 
       if (response.ok && socket) {
-        socket.emit('poll:respond', { pollId, optionId })
+        socket.emit("poll:respond", { pollId, optionId });
       }
     } catch (error) {
-      console.error('Failed to respond to poll:', error)
+      console.error("Failed to respond to poll:", error);
     }
-  }
+  };
 
   const handleGetResults = async (pollId: string) => {
     try {
       const response = await fetch(`/api/polls/${pollId}/results`, {
-        method: 'POST'
-      })
+        method: "POST",
+      });
 
       if (response.ok) {
-        loadMessages() // Reload to get updated results
+        loadMessages(); // Reload to get updated results
       }
     } catch (error) {
-      console.error('Failed to get poll results:', error)
+      console.error("Failed to get poll results:", error);
     }
-  }
+  };
 
   if (loading) {
     return (
@@ -224,7 +244,7 @@ export function ChatArea({ chatId, chatType }: ChatAreaProps) {
           <p className="text-gray-500">Loading messages...</p>
         </div>
       </div>
-    )
+    );
   }
 
   return (
@@ -234,27 +254,36 @@ export function ChatArea({ chatId, chatType }: ChatAreaProps) {
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
             <div className="w-10 h-10 bg-gradient-to-br from-blue-400 to-purple-500 rounded-full flex items-center justify-center text-white font-semibold">
-              {chatInfo?.name?.[0]?.toUpperCase() || chatInfo?.display_name?.[0]?.toUpperCase() || '?'}
+              {chatInfo?.name?.[0]?.toUpperCase() ||
+                chatInfo?.display_name?.[0]?.toUpperCase() ||
+                "?"}
             </div>
             <div>
               <h2 className="text-lg font-semibold text-gray-900">
-                {chatInfo?.name || chatInfo?.display_name || 'Loading...'}
+                {chatInfo?.name || chatInfo?.display_name || "Loading..."}
               </h2>
               <p className="text-sm text-gray-500">
-                {chatType === 'group' 
+                {chatType === "group"
                   ? `${chatInfo?.members?.length || 0} members`
-                  : `@${chatInfo?.username || 'loading'}`
-                }
+                  : `@${chatInfo?.username || "loading"}`}
               </p>
             </div>
           </div>
           <div className="flex items-center space-x-2">
-            {chatType === 'group' && (
+            {chatType === "group" && (
               <>
                 <Badge variant="secondary">
                   <Users className="h-3 w-3 mr-1" />
                   Group
                 </Badge>
+                <GroupManagement
+                  groupId={chatId}
+                  isAdmin={chatInfo?.admin_id === userId}
+                  onMemberAdded={() => {
+                    // Reload chat info to get updated member count
+                    loadChatInfo();
+                  }}
+                />
                 <Button variant="ghost" size="sm">
                   <Settings className="h-4 w-4" />
                 </Button>
@@ -269,24 +298,26 @@ export function ChatArea({ chatId, chatType }: ChatAreaProps) {
         <div className="py-4 space-y-4">
           {messages.map((message) => (
             <div key={message.id}>
-              {message.message_type === 'poll' && message.poll ? (
+              {message.message_type === "poll" && message.poll ? (
                 <PollComponent
                   poll={message.poll}
-                  isGroupAdmin={chatType === 'group' && chatInfo?.admin_id === session?.user?.id}
+                  isGroupAdmin={
+                    chatType === "group" && chatInfo?.admin_id === userId
+                  }
                   onRespond={handlePollResponse}
                   onGetResults={handleGetResults}
-                  currentUserId={session?.user?.id || ''}
+                  currentUserId={userId || ""}
                 />
               ) : (
                 <MessageBubble
                   message={message}
-                  isOwn={message.sender.id === session?.user?.id}
-                  showAvatar={chatType === 'group'}
+                  isOwn={message.sender.id === userId}
+                  showAvatar={chatType === "group"}
                 />
               )}
             </div>
           ))}
-          
+
           {messages.length === 0 && (
             <div className="text-center py-12 text-gray-500">
               <MessageCircle className="h-12 w-12 mx-auto mb-4 text-gray-300" />
@@ -294,7 +325,7 @@ export function ChatArea({ chatId, chatType }: ChatAreaProps) {
               <p className="text-xs">Start the conversation!</p>
             </div>
           )}
-          
+
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
@@ -305,12 +336,14 @@ export function ChatArea({ chatId, chatType }: ChatAreaProps) {
           <Input
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
-            placeholder={`Message ${chatInfo?.name || chatInfo?.display_name || ''}...`}
+            placeholder={`Message ${
+              chatInfo?.name || chatInfo?.display_name || ""
+            }...`}
             className="flex-1"
             disabled={sending}
           />
-          <Button 
-            type="submit" 
+          <Button
+            type="submit"
             disabled={!newMessage.trim() || sending}
             className="bg-blue-600 hover:bg-blue-700"
           >
@@ -323,5 +356,5 @@ export function ChatArea({ chatId, chatType }: ChatAreaProps) {
         </form>
       </div>
     </div>
-  )
+  );
 }

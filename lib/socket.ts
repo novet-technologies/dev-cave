@@ -1,7 +1,7 @@
 import { Server as SocketIOServer } from "socket.io";
 import { Server as NetServer } from "http";
 import { NextApiResponse } from "next";
-import { supabase } from "./supabase";
+import { createServerSupabaseClient } from "./supabase";
 
 export type NextApiResponseServerIO = NextApiResponse & {
   socket: {
@@ -75,23 +75,39 @@ export const initializeSocket = (server: NetServer) => {
 
       socket.on("message:send", async (data) => {
         try {
+          const admin = createServerSupabaseClient();
+
           // Insert message to database
-          const { data: message, error } = await supabase
+          const { data: message, error } = await admin
             .from("messages")
             .insert({
               content: data.content,
               sender_id: socket.data.userId,
               group_id: data.groupId,
               receiver_id: data.receiverId,
+              message_type: "text",
             })
-            .select("*")
+            .select(
+              `
+              *,
+              sender:sender_id(id, username, display_name, avatar_url)
+            `
+            )
             .single();
 
           if (error) throw error;
 
           // Emit to appropriate room
-          const roomId = data.groupId || `direct:${data.receiverId}`;
-          io.to(roomId).emit("message:new", message);
+          if (data.groupId) {
+            // Group message - emit to group room
+            io.to(data.groupId).emit("message:new", message);
+          } else if (data.receiverId) {
+            // Direct message - emit to both users' direct rooms
+            const senderRoom = `direct:${socket.data.userId}`;
+            const receiverRoom = `direct:${data.receiverId}`;
+            io.to(senderRoom).emit("message:new", message);
+            io.to(receiverRoom).emit("message:new", message);
+          }
         } catch (error) {
           console.error("Error sending message:", error);
         }
@@ -99,8 +115,10 @@ export const initializeSocket = (server: NetServer) => {
 
       socket.on("poll:respond", async (data) => {
         try {
+          const admin = createServerSupabaseClient();
+
           // Insert poll response
-          const { error } = await supabase.from("poll_responses").upsert({
+          const { error } = await admin.from("poll_responses").upsert({
             poll_id: data.pollId,
             user_id: socket.data.userId,
             option_id: data.optionId,
@@ -109,7 +127,7 @@ export const initializeSocket = (server: NetServer) => {
           if (error) throw error;
 
           // Get poll info to emit to group
-          const { data: poll } = await supabase
+          const { data: poll } = await admin
             .from("polls")
             .select("group_id")
             .eq("id", data.pollId)
@@ -129,7 +147,9 @@ export const initializeSocket = (server: NetServer) => {
 
       socket.on("user:status", async (status) => {
         try {
-          await supabase
+          const admin = createServerSupabaseClient();
+
+          await admin
             .from("profiles")
             .update({ status })
             .eq("id", socket.data.userId);
@@ -144,7 +164,9 @@ export const initializeSocket = (server: NetServer) => {
         console.log("User disconnected:", socket.id);
         try {
           if (socket.data.userId) {
-            await supabase
+            const admin = createServerSupabaseClient();
+
+            await admin
               .from("profiles")
               .update({ status: "offline" })
               .eq("id", socket.data.userId);
